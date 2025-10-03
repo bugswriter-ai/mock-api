@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template # Add render_template
+from flask import Flask, request, jsonify, render_template
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 import os
@@ -15,7 +15,6 @@ if not MONGO_URI:
 
 
 # Specify the database and collection you want to access
-# IMPORTANT: Replace these with your actual database and collection names
 DB_NAME = "test"
 COLLECTION_NAME = "ner_results"
 
@@ -27,19 +26,33 @@ def home():
     """
     return render_template('index.html')
 
-# --- Existing Route to fetch and display data (GET request) ---
+# --- MODIFIED Route to fetch and display data (GET request) ---
 @app.route('/fetch_data', methods=['GET'])
 def fetch_data():
     """
-    Connects to MongoDB, fetches all documents, and returns them as JSON.
+    Connects to MongoDB, fetches documents that DO NOT have coordinates,
+    and returns them as JSON.
     """
     try:
         client = MongoClient(MONGO_URI)
         db = client[DB_NAME]
         collection = db[COLLECTION_NAME]
 
-        # Fetch all documents and convert ObjectId to a string for JSON serialization
-        data = list(collection.find())
+        # MODIFICATION: Filter documents where 'coordinates' is null, not present, or an empty array.
+        # $or: Match documents where
+        # 1. 'coordinates' field does not exist ($exists: false)
+        # 2. 'coordinates' field exists but is null ({"coordinates": None})
+        # 3. 'coordinates' field exists but is an empty array ({"coordinates": []})
+        query = {
+            "$or": [
+                {"coordinates": {"$exists": False}},
+                {"coordinates": None},
+                {"coordinates": {"$size": 0}}
+            ]
+        }
+
+        # Fetch filtered documents and convert ObjectId to a string for JSON serialization
+        data = list(collection.find(query))
         for document in data:
             document['_id'] = str(document['_id'])
 
@@ -73,7 +86,30 @@ def update_coordinates():
         try:
             object_id = ObjectId(document_id)
         except Exception:
-            return jsonify({"error": "Invalid ObjectId format"}), 400
+            # Assumes the 'id' field passed from Flutter is the MongoDB document's '_id'
+            # If the original database design uses a string ID that is NOT ObjectId, this try/except might need adjustment.
+            # Assuming it's the string representation of an ObjectId for now.
+            try:
+                object_id = ObjectId(document_id)
+            except:
+                 # Fallback to querying by the string 'id' field if ObjectId conversion fails
+                 client = MongoClient(MONGO_URI)
+                 db = client[DB_NAME]
+                 collection = db[COLLECTION_NAME]
+                 query = {"id": document_id} # Assuming there is a field named 'id' that holds the value
+                 
+                 # Define the update operation
+                 update = {"$set": {"coordinates": new_coordinates}}
+
+                 # Perform the update operation
+                 result = collection.update_one(query, update)
+
+                 client.close()
+                 if result.modified_count > 0:
+                     return jsonify({"message": f"Successfully updated document with id (string): {document_id}"}), 200
+                 else:
+                    return jsonify({"message": f"No document found or no changes made for id (string): {document_id}"}), 404
+        
 
         # Connect to MongoDB
         client = MongoClient(MONGO_URI)
