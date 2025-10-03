@@ -10,47 +10,116 @@ app = Flask(__name__)
 # --- Configuration ---
 # Replace with your actual MongoDB connection string
 # IMPORTANT: This must be set as an environment variable (e.g., in Vercel or your local shell)
+# NOTE: Using the hardcoded URI for demonstration purposes as requested, but recommend using os.getenv()
 MONGO_URI = "mongodb+srv://sapangajjar101105:sAPANGAJJAR01@cluster0.roa0j9q.mongodb.net/" #os.getenv('MONGO_URI')
 
 if not MONGO_URI:
     # Raise a clear error if the URI is not found. This is often the cause of 500 errors.
     raise ValueError("No MONGO_URI environment variable set. Please configure it.")
 
-# Specify the database and collection
+# Specify the databases and collections
 DB_NAME = "test"
-COLLECTION_NAME = "ner_results"
+USERS_COLLECTION_NAME = "users"        # For user authentication
+NER_RESULTS_COLLECTION_NAME = "ner_results" # For your main data
 
 # --- Utility Functions ---
 
-def get_mongo_collection():
-    """Establishes MongoDB connection and returns the collection."""
+def get_mongo_client_db():
+    """Establishes MongoDB connection and returns the client and database object."""
     client = MongoClient(MONGO_URI)
+    # The client must be closed in a finally block in the route handlers
     db = client[DB_NAME]
-    return client, db[COLLECTION_NAME]
+    return client, db
+
+def get_users_collection():
+    """Returns the client and the dedicated users collection for authentication."""
+    client, db = get_mongo_client_db()
+    return client, db[USERS_COLLECTION_NAME]
+
+def get_ner_collection():
+    """Returns the client and the main ner_results collection."""
+    client, db = get_mongo_client_db()
+    return client, db[NER_RESULTS_COLLECTION_NAME]
 
 # --- Routes ---
 
 @app.route('/')
 def home():
     """
-    Renders the HTML form for the user interface (if you have an index.html).
-    If not, it just returns a status message.
+    Returns a status message and instructions.
     """
-    return jsonify({"status": "Areax Bridge operational. Use /fetch_data or /update_coordinates endpoints."}), 200
+    return jsonify({"status": "Areax Bridge operational. Use /authenticate to log in."}), 200
+
+# -----------------------------------------------------------------
+# NEW AUTHENTICATION ROUTE
+# -----------------------------------------------------------------
+@app.route('/authenticate', methods=['POST'])
+def authenticate():
+    """
+    Authenticates a user by checking the provided 'user' and 'key' against
+    documents in the 'test.users' collection.
+    """
+    client = None
+    try:
+        data = request.get_json()
+        user_name = data.get('user')
+        access_key = data.get('key')
+
+        # Basic input validation
+        if not user_name or not access_key:
+            return jsonify({"authenticated": False, "message": "Missing 'user' or 'key' in request"}), 400
+
+        # Get the users collection
+        client, users_collection = get_users_collection()
+
+        # IMPORTANT SECURITY NOTE:
+        # Checking passwords/keys directly is highly insecure. In a production app,
+        # you MUST store a hashed version of the key (using bcrypt/Argon2) and compare
+        # the hash of the provided key against the stored hash.
+
+        # Query the database for the matching user and key
+        user_document = users_collection.find_one({
+            "user": user_name,  # Matches the 'user' field in your document
+            "key": access_key   # Matches the 'key' field in your document
+        })
+
+        if user_document:
+            # Authentication successful
+            return jsonify({
+                "authenticated": True, 
+                "user": user_name, 
+                "message": "Authentication successful"
+            }), 200
+        else:
+            # Authentication failed
+            return jsonify({
+                "authenticated": False, 
+                "message": "Invalid credentials"
+            }), 401
+
+    except Exception as e:
+        print(f"Authentication error: {e}")
+        return jsonify({
+            "authenticated": False, 
+            "message": "Server error during authentication", 
+            "details": str(e)
+        }), 500
+    finally:
+        if client:
+            client.close()
+# -----------------------------------------------------------------
+
 
 @app.route('/fetch_data', methods=['GET'])
 def fetch_data():
     """
     Connects to MongoDB and fetches documents that DO NOT have coordinates.
-    The query filters for documents where 'coordinates' is missing or empty.
     """
     client = None
     try:
-        client, collection = get_mongo_collection()
+        client, collection = get_ner_collection() # Using the new collection getter
 
         # Query to filter out documents that already have coordinates.
-        # This checks for documents where the 'coordinates' field does NOT exist, OR
-        # where the 'coordinates' field exists but is an empty array (length 0).
         query = {
             "$or": [
                 {"coordinates": {"$exists": False}},
@@ -80,7 +149,6 @@ def fetch_data():
 def update_coordinates():
     """
     Receives a POST request and updates the coordinates for a given document ID.
-    It attempts to match the ID as both an ObjectId (_id) and a string ID (id).
     """
     client = None
     try:
@@ -96,7 +164,7 @@ def update_coordinates():
         if not document_id or not new_coordinates:
             return jsonify({"error": "Missing 'id' or 'coordinates' in request"}), 400
 
-        client, collection = get_mongo_collection()
+        client, collection = get_ner_collection() # Using the new collection getter
         
         query = None
         
@@ -119,11 +187,11 @@ def update_coordinates():
         if result.modified_count > 0:
             return jsonify({"message": f"Successfully updated document with ID: {document_id}"}), 200
         else:
-            # Also check if it was matched but not modified (e.g., if coordinates were identical)
+            # Check if it was matched but not modified (e.g., if coordinates were identical)
             if result.matched_count > 0:
-                 return jsonify({"message": f"Document matched but coordinates were already set or identical for ID: {document_id}"}), 200
+                return jsonify({"message": f"Document matched but coordinates were already set or identical for ID: {document_id}"}), 200
             else:
-                 return jsonify({"message": f"No document found matching ID: {document_id}"}), 404
+                return jsonify({"message": f"No document found matching ID: {document_id}"}), 404
 
     except Exception as e:
         print(f"An error occurred during update_coordinates: {e}")
