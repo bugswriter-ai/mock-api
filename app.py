@@ -10,7 +10,7 @@ app = Flask(__name__)
 # --- Configuration ---
 # Replace with your actual MongoDB connection string
 # IMPORTANT: This must be set as an environment variable (e.g., in Vercel or your local shell)
-MONGO_URI = os.getenv('MONGO_URI')
+MONGO_URI = "mongodb+srv://sapangajjar101105:sAPANGAJJAR01@cluster0.roa0j9q.mongodb.net/" #os.getenv('MONGO_URI')
 
 if not MONGO_URI:
     # Raise a clear error if the URI is not found. This is often the cause of 500 errors.
